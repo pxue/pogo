@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/pkmngo-odi/pogo/auth"
 	"github.com/pkmngo-odi/pogo/rpc"
@@ -16,9 +17,10 @@ const downloadSettingsHash = "05daf51635c82611d1aac95c0b051d3ec088a930"
 
 // Session is used to communicate with the Pokémon Go API
 type Session struct {
+	Location *Location
+
 	url      string
 	rpc      *rpc.Client
-	location *Location
 	provider auth.Provider
 	debug    bool
 }
@@ -30,8 +32,8 @@ func generateRequests() []*protos.Request {
 // NewSession constructs a Pokémon Go RPC API client
 func NewSession(provider auth.Provider, location *Location, debug bool) *Session {
 	return &Session{
+		Location: location,
 		rpc:      rpc.NewClient(),
-		location: location,
 		provider: provider,
 		debug:    debug,
 	}
@@ -67,9 +69,9 @@ func (s *Session) Call(requests []*protos.Request) (*protos.ResponseEnvelope, er
 		StatusCode: int32(2),
 		Unknown12:  int64(989),
 
-		Longitude: s.location.Lon,
-		Latitude:  s.location.Lat,
-		Altitude:  s.location.Alt,
+		Longitude: s.Location.Lon,
+		Latitude:  s.Location.Lat,
+		Altitude:  s.Location.Alt,
 
 		AuthInfo: auth,
 
@@ -134,6 +136,71 @@ func (s *Session) Init() error {
 
 	s.setURL(url)
 	return nil
+}
+
+// Announce publishes the player's presence and returns the map environment
+func (s *Session) Announce(route []uint64, location *Location) (mapObjects *protos.GetMapObjectsResponse, err error) {
+	lastTimestamp := time.Now().Unix() * 1000
+
+	requests := generateRequests()
+
+	// Request the map objects based on my current location and route cell ids
+	getMapObjectsMessage, _ := proto.Marshal(&protos.GetMapObjectsMessage{
+		// Traversed route since last supposed last heartbeat
+		CellId: route,
+
+		// Timestamps in milliseconds corresponding to each route cell id
+		SinceTimestampMs: make([]int64, len(route)),
+
+		// Current longitide and latitude
+		Longitude: location.Lon,
+		Latitude:  location.Lat,
+	})
+
+	requests = append(requests, &protos.Request{
+		RequestType:    protos.RequestType_GET_MAP_OBJECTS,
+		RequestMessage: getMapObjectsMessage,
+	})
+
+	requests = append(requests, &protos.Request{
+		RequestType: protos.RequestType_GET_HATCHED_EGGS,
+	})
+
+	// Request the inventory with a message containing the current time
+	getInventoryMessage, _ := proto.Marshal(&protos.GetInventoryMessage{
+		LastTimestampMs: lastTimestamp,
+	})
+
+	requests = append(requests, &protos.Request{
+		RequestType:    protos.RequestType_GET_INVENTORY,
+		RequestMessage: getInventoryMessage,
+	})
+
+	requests = append(requests, &protos.Request{
+		RequestType: protos.RequestType_CHECK_AWARDED_BADGES,
+	})
+
+	settingsMessage, _ := proto.Marshal(&protos.DownloadSettingsMessage{
+		Hash: downloadSettingsHash,
+	})
+
+	requests = append(requests, &protos.Request{
+		RequestType:    protos.RequestType_DOWNLOAD_SETTINGS,
+		RequestMessage: settingsMessage,
+	})
+
+	response, err := s.Call(requests)
+	if err != nil {
+		return mapObjects, &RequestError{}
+	}
+
+	if err := GetErrorFromStatus(response.StatusCode); err != nil {
+		return mapObjects, err
+	}
+
+	mapObjects = &protos.GetMapObjectsResponse{}
+	proto.Unmarshal(response.Returns[0], mapObjects)
+	return mapObjects, nil
 }
 
 // GetPlayer returns the current player profile
