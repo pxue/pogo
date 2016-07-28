@@ -2,6 +2,7 @@ package api
 
 import (
 	"math"
+	"sort"
 
 	"github.com/golang/geo/s2"
 	protos "github.com/pkmngo-odi/pogo-protos"
@@ -28,12 +29,12 @@ type Location struct {
 func (l *Location) GetCellIDs() CellIDs {
 	origin := s2.CellIDFromLatLng(s2.LatLngFromDegrees(l.Lat, l.Lon)).Parent(cellIDLevel)
 
-	var cellIDs = make([]uint64, 0)
-	cellIDs = append(cellIDs, uint64(origin))
+	cellIDs := CellIDs{uint64(origin)}
 	for _, cellID := range origin.EdgeNeighbors() {
 		cellIDs = append(cellIDs, uint64(cellID))
 	}
 
+	sort.Sort(cellIDs)
 	return cellIDs
 }
 
